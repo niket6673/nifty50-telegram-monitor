@@ -27,7 +27,7 @@ def is_market_hours(now):
 def get_intraday_data():
     ticker = yf.Ticker(NIFTY_SYMBOL)
     data = ticker.history(period="1d", interval="1m")
-    return data
+    return ticker, data
 
 def main():
     now = datetime.datetime.now(IST)
@@ -36,19 +36,26 @@ def main():
     if is_weekend(now):
         return
 
-    # Fetch data
+    # Fetch data with retry
     for attempt in range(3):
         try:
-            data = get_intraday_data()
+            ticker, data = get_intraday_data()
             break
         except Exception:
             time.sleep(5)
     else:
         return
 
-    # If no intraday data → likely holiday
     if data.empty:
-        # Send holiday notification only during first scheduled hour (before 10 AM IST)
+        return
+
+    # Convert last candle time to IST
+    last_timestamp = data.index[-1].tz_convert("Asia/Kolkata")
+    today_date = now.date()
+
+    # If last candle is NOT from today → holiday
+    if last_timestamp.date() != today_date:
+        # Send holiday message only once (first hour run)
         if now.hour < 10:
             message = f"""📊 NIFTY 50 Update
 
@@ -60,16 +67,18 @@ No trading session today.
             send_message(message)
         return
 
-    # If outside market hours but weekday → do nothing
+    # If outside market hours → do nothing
     if not is_market_hours(now):
         return
 
-    # Normal open market update
     current = data["Close"].iloc[-1]
-    open_price = data["Open"].iloc[0]
 
-    change = current - open_price
-    change_pct = (change / open_price) * 100
+    # Calculate change from previous close (matches Google style)
+    prev_close_data = ticker.history(period="2d")
+    previous_close = prev_close_data["Close"].iloc[-2]
+
+    change = current - previous_close
+    change_pct = (change / previous_close) * 100
 
     message = f"""📊 NIFTY 50 Update
 
